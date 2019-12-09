@@ -36,7 +36,3 @@ subprojects {
         systemProperty "javax.xml.stream.XMLOutputFactory", "com.sun.xml.internal.stream.XMLOutputFactoryImpl"
     }
 }
-
-task wrapper(type: Wrapper) {
-    gradleVersion = '4.5.1'
-}

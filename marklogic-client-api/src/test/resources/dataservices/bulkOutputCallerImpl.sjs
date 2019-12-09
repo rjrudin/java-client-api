@@ -1,15 +1,16 @@
 'use strict';
 
-const state  = fn.head(xdmp.fromJSON(endpointState));
+const state = fn.head(xdmp.fromJSON(endpointState));
 const work = fn.head(xdmp.fromJSON(workUnit));
 
-const res = [];
-const d = fn.subsequence(fn.collection("bulkOutputTest"), 1);
-res.push(state);
-for (const x of d) {
-res.push(x); };
-
-state.next = state.next + 1;
-const returnValue = (state.next < work.max) ? Sequence.from(res) : null;
-
-returnValue;
+if (state.next > work.max) {
+	null;
+} else {
+	const d = fn.subsequence(
+		cts.search(cts.collectionQuery("bulkOutputTest"),
+			cts.indexOrder(cts.uriReference())),
+		state.next, 1
+	);
+	state.next = state.next + 1;
+	Sequence.from([state, d]);
+}
