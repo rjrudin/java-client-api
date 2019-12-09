@@ -10,6 +10,8 @@ import com.marklogic.client.datamovement.QueryBatcher;
 import com.marklogic.client.dataservices.OutputEndpoint;
 import com.marklogic.client.impl.NodeConverter;
 import com.marklogic.client.io.StringHandle;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayInputStream;
 import java.util.ArrayList;
@@ -17,6 +19,8 @@ import java.util.Arrays;
 import java.util.List;
 
 public class RunStepTest {
+
+	private final static Logger logger = LoggerFactory.getLogger(RunStepTest.class);
 
 	private final static String JSON = "{\n" +
 		"  \"endpoint\": \"/dataservices/runStep.sjs\",\n" +
@@ -39,33 +43,41 @@ public class RunStepTest {
 		"}\n";
 
 	public static void main(String[] args) {
-		DatabaseClient client = DatabaseClientFactory.newClient("localhost", 8010,
-			new DatabaseClientFactory.DigestAuthContext("admin", "admin"));
+		final DatabaseClientFactory.SecurityContext authContext = new DatabaseClientFactory.DigestAuthContext("admin", "admin");
+		final String host = "localhost";
+		DatabaseClient stagingClient = DatabaseClientFactory.newClient(host, 8010, authContext);
+		DatabaseClient finalClient = DatabaseClientFactory.newClient(host, 8011, authContext);
 
-		DataMovementManager dmm = client.newDataMovementManager();
-		List<String> forestIds = new ArrayList<>();
+		DataMovementManager dmm = stagingClient.newDataMovementManager();
+		final List<String> stagingForestIds = new ArrayList<>();
 		for (Forest f : dmm.readForestConfig().listForests()) {
-			forestIds.add(f.getForestId());
+			stagingForestIds.add(f.getForestId());
+		}
+
+		List<String> finalForestIds = new ArrayList<>();
+		for (Forest f : finalClient.newDataMovementManager().readForestConfig().listForests()) {
+			finalForestIds.add(f.getForestId());
 		}
 
 		List<String> stepBatchResults = new ArrayList<>();
 
 		final String jobId = "abc123";
 		final String flowName = "ingestion_mapping_mastering-flow";
-		final List<String> stepNumbers = Arrays.asList("2");
+		final List<String> stepNumbers = Arrays.asList("2", "3");
 		final String firstStepNumber = stepNumbers.get(0);
 		final String lastStepNumber = stepNumbers.get(stepNumbers.size() - 1);
 
-		JobService jobService = JobService.on(client);
-		System.out.println("Starting job");
+		JobService jobService = JobService.on(stagingClient);
+		logger.info("Starting job");
 		jobService.startJob(jobId, flowName, stepNumbers.get(0));
 
 		for (String stepNumber : stepNumbers) {
+			List<String> forestIds = stepNumber.equals("2") ? stagingForestIds : finalForestIds;
 			QueryBatcher queryBatcher = dmm.newQueryBatcher(forestIds.iterator())
 				.withBatchSize(1)
-				.withThreadCount(2)
+				.withThreadCount(3)
 				.onUrisReady(batch -> {
-					OutputEndpoint.BulkOutputCaller bulkCaller = OutputEndpoint.on(client, new StringHandle(JSON)).bulkCaller();
+					OutputEndpoint.BulkOutputCaller bulkCaller = OutputEndpoint.on(stagingClient, new StringHandle(JSON)).bulkCaller();
 
 					ObjectNode state = IOTestUtil.mapper.createObjectNode();
 					state.put("jobId", jobId);
@@ -83,8 +95,11 @@ public class RunStepTest {
 
 					bulkCaller.setEndpointState(new ByteArrayInputStream(state.toString().getBytes()));
 					bulkCaller.setWorkUnit(new ByteArrayInputStream(work.toString().getBytes()));
-					bulkCaller.setOutputListener(value -> stepBatchResults.add(NodeConverter.InputStreamToString(value)));
-					System.out.println("Awaiting");
+					bulkCaller.setOutputListener(value -> {
+						logger.info("Adding output");
+						stepBatchResults.add(NodeConverter.InputStreamToString(value));
+					});
+					logger.info("Awaiting bulkCaller completion");
 					bulkCaller.awaitCompletion();
 				});
 
@@ -96,13 +111,13 @@ public class RunStepTest {
 			queryBatcher.awaitCompletion();
 			dmm.stopJob(queryBatcher);
 
-			System.out.println("RESULTS: " + stepBatchResults);
+			logger.info("RESULTS: " + stepBatchResults);
 
 			if (stepNumber.equals(lastStepNumber)) {
-				System.out.println("Finishing job");
+				logger.info("Finishing job");
 				jobService.finishJob(jobId, stepNumber);
 			} else {
-				System.out.println("Finishing step");
+				logger.info("Finishing step");
 				jobService.finishStep(jobId, stepNumber);
 			}
 		}
